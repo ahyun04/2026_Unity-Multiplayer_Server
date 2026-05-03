@@ -1,2 +1,2 @@
-# 2026_Unity-Multiplayer_Server
-포톤서버
+# 2026_Unity_Multiplayer_Server
+3학년 포톤 서버 

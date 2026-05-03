@@ -10,10 +10,48 @@ public class FusionBootstrap : MonoBehaviour , INetworkRunnerCallbacks
     [Header("Session")]
     [SerializeField] private string sessionName = "Room_01";
 
+    [Header("Player")]
+    [SerializeField] private NetworkPrefabRef playerPrefab;                             //네트워크에 등록된 프리팹
+    [SerializeField] private Transform[] spawnPoints;                                   //스폰 위치 설정 
+
+    [Header("Pickable Box")]
+    [SerializeField] private NetworkPrefabRef pickableBoxPrefab;
+    [SerializeField] private Transform[] boxSpawnPoints;
+
+    private bool boxesSpawned = false;
+
+    private Dictionary<PlayerRef, NetworkObject> playerObjects = new();
+
     private NetworkRunner runner;
+
+    public struct NetworkInputData : INetworkInput
+    {
+        public Vector2 move;
+        public float cameraYaw;
+        public NetworkButtons buttons;
+    }
+
+    public enum InputButton
+    {
+        Fire = 0,
+        Jump = 1,
+        Pickup = 2
+    }
+
 
     public void StartHost() => _ = StartGame(GameMode.Host);
     public void StartClinet() => _ = StartGame(GameMode.Client);
+
+    private Vector3 GetSpawnPosition(PlayerRef player)
+    {
+        if (spawnPoints != null && spawnPoints.Length > 0)
+        {
+            int index = player.RawEncoded % spawnPoints.Length;
+            return spawnPoints[index].position;
+        }
+
+        return new Vector3(player.RawEncoded * 2, 1, 0);                //RawEncoded (바이트(byte)) 형태로 변환 (직렬화) 중간단계
+    }
 
     private async Task StartGame(GameMode mode)
     {
@@ -34,19 +72,99 @@ public class FusionBootstrap : MonoBehaviour , INetworkRunnerCallbacks
         });
 
         if (result.Ok)
+        {
             Debug.Log($"[Fusion] StartGame OK - {mode} / {sessionName}");
+
+            if (runner.IsServer)
+            {
+                SpawnBoxes();
+            }
+        }           
         else
+        {
             Debug.LogError($"[Fusion] StartGame FAILED - {result.ShutdownReason}");
+        }
+           
     }
 
+    public void SpawnBoxes()
+    {
+        if (!runner.IsServer) return;
+
+        if (boxesSpawned) return;
+
+        boxesSpawned = true;
+
+        if(boxSpawnPoints == null || boxSpawnPoints.Length == 0) return;
+
+        foreach(var point in boxSpawnPoints)
+        {
+            if (point == null) continue;
+
+            runner.Spawn(pickableBoxPrefab,point.position, point.rotation, null);
+        }
+
+        Debug.Log($"상자 {boxSpawnPoints.Length} 개 생성 완료");
+    }
   
 
     // --------------------- 콜백 (필수/미사용은 빈 구현) -------------------
 
-    public void OnPlayerJoined(NetworkRunner runner, PlayerRef player) { }
-    public void OnPlayerLeft(NetworkRunner runner, PlayerRef player) { }
+    public void OnPlayerJoined(NetworkRunner runner, PlayerRef player) 
+    {
+        Debug.Log($"플레이어 입장 : {player}");
 
-    public void OnInput(NetworkRunner runner, NetworkInput input) { }
+        if (!runner.IsServer)
+            return;
+
+        Vector3 spawnPos = GetSpawnPosition(player);
+
+        var obj = runner.Spawn(
+            playerPrefab,
+            spawnPos,
+            Quaternion.identity,
+            player
+        );
+
+        playerObjects[player] = obj;
+        runner.SetPlayerObject(player, obj);
+
+    }
+    public void OnPlayerLeft(NetworkRunner runner, PlayerRef player) 
+    {
+        if (!runner.IsServer) return;
+
+        if (playerObjects.TryGetValue(player, out var obj))
+        {
+            runner.Despawn(obj);
+            playerObjects.Remove(player);
+        }
+
+        Debug.Log($"플레이어 제거됨 : {player}");
+    
+    }
+
+    public void OnInput(NetworkRunner runner, NetworkInput input)
+    {
+        NetworkInputData data = new NetworkInputData();
+
+        data.move = new Vector2(
+            Input.GetAxisRaw("Horizontal"),
+            Input.GetAxisRaw("Vertical")
+        );
+
+        data.cameraYaw = SimplePlayer.LocalCameraYaw;
+
+        var buttons = new NetworkButtons();                                         //네트워크 버튼 생성 
+        buttons.Set((int)InputButton.Fire, Input.GetMouseButton(0));                //마우스 버튼
+        buttons.Set((int)InputButton.Jump, Input.GetKey(KeyCode.Space));            //점프 버튼
+        buttons.Set((int)InputButton.Pickup, Input.GetKey(KeyCode.E));              //물건 상호작용 버튼
+
+        data.buttons = buttons;
+
+        input.Set(data);
+    }
+
     public void OnInputMissing(NetworkRunner runner, PlayerRef player , NetworkInput input) { }
 
     public void OnConnectedToServer(NetworkRunner runner) { }
